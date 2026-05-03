@@ -12,9 +12,11 @@ from tqdm import tqdm
 from PIL import Image
 import torch
 import time
+import cv2
 
-from utils.pred_utils import load_data, process_im, stuff_from_state_dict_path
+from utils.pred_utils import load_data, process_im, stuff_from_state_dict_path, overlay_im_with_masks
 from utils.confmat import ConfusionMatrix
+from utils.utils import load_hdf5
 
 
 def main():
@@ -23,25 +25,28 @@ def main():
     parser.add_argument('--root', type=str, required=True, help="STIOS root")
     parser.add_argument('--rcvisard', default=False, action='store_true', help="Run on rc_visard images")
     parser.add_argument('--zed', default=False, action='store_true', help="Run on ZED images")
+    parser.add_argument('--save-dir', type=str, default=None, help="Directory to save prediction overlays")
+    parser.add_argument('--backbone', type=str, default='dinov2b', choices=['dinov2l', 'dinov2b', 'INSTR'], help="Backbone to use (overrides config.yaml setting)")
     args = parser.parse_args()
 
     assert args.rcvisard or args.zed
     assert not (args.rcvisard and args.zed)
     assert os.path.isfile(args.state_dict)
 
-    cfg, net = stuff_from_state_dict_path(args.state_dict)
-    if args.zed:
-        print('Modifying subpixel correlation layer to fit ZED intrinsics')
-        time.sleep(1)
-        net.adapt_to_new_intrinsics(f_new=1390.0277099609375 / (2208/640), b_new=0.12)
-    else:
-        print('Modifying subpixel correlation layer to fit rc_visard intrinsics')
-        time.sleep(1)
-        net.adapt_to_new_intrinsics(f_new=1082.28 / (1280/640), b_new=0.0650206)
+    cfg, net = stuff_from_state_dict_path(args.state_dict, backbone=args.backbone)
+    if cfg.MODEL.get("WITH_DISP", True):
+        if args.zed:
+            print('Modifying subpixel correlation layer to fit ZED intrinsics')
+            time.sleep(1)
+            net.adapt_to_new_intrinsics(f_new=1390.0277099609375 / (2208/640), b_new=0.12)
+        else:
+            print('Modifying subpixel correlation layer to fit rc_visard intrinsics')
+            time.sleep(1)
+            net.adapt_to_new_intrinsics(f_new=1082.28 / (1280/640), b_new=0.0650206)
 
     net = net.cuda().eval()
 
-    paths = load_data(root=args.root)
+    paths = load_data(root=args.root, sensor='rc_visard' if args.rcvisard else 'zed')
 
     results = {}
 
@@ -60,24 +65,37 @@ def main():
             num_dets_diff = []
             det_75_ratio = []
             # load images
-            for (left, right, depth, gt) in tqdm(paths[sensor][folder]):
+            for (left, gt) in tqdm(paths[sensor][folder]):
                 mat = ConfusionMatrix(threshold=0.5)
 
                 left = Image.open(left)
-                right = Image.open(right)
+                #right = Image.open(right)
                 left_t = process_im(left)
-                right_t = process_im(right)
+                #right_t = process_im(right)
 
+                
                 gt = np.array(Image.open(gt))
                 gt = torch.from_numpy(gt).unsqueeze(0)
 
                 with torch.no_grad():
-                    preds = net({'color_0': left_t, 'color_1': right_t})
+                    preds = net({'color_0': left_t})
                 pred = preds['predictions_0'][0].unsqueeze(0)
 
                 mat(pred, targets=gt)
                 ious.append(mat.get_iou().item())
                 f1s.append(mat.get_f1().item())
+
+                if args.save_dir:
+                    save_folder = os.path.join(args.save_dir, sensor, folder)
+                    os.makedirs(save_folder, exist_ok=True)
+
+                    data = load_hdf5(args.paths)
+                    left_overlay = overlay_im_with_masks(data['colors'][0], ma=data['segmap'], alpha=0.3)
+
+                    cv2.imshow('left', data['colors'][0])
+                    cv2.imshow('left_overlay', left_overlay)
+                    cv2.imshow('right', data['colors'][1])
+                    cv2.waitKey(0)
 
             results[folder] = {
                 'ious': ious,

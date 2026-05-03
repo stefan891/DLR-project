@@ -33,13 +33,16 @@ YCB_OBJECTS = [
 ]
 
 
-def stuff_from_state_dict_path(path):
+def stuff_from_state_dict_path(path, backbone='INSTR', dino_weights=None):
     cfg_path = '/'.join(path.split('/')[:-2]) + '/config.yaml'
     with open(cfg_path, 'r') as f:
-        cfg = CfgNode(yaml.load(f))
+        cfg = CfgNode(yaml.safe_load(f))
 
-    net = INSTR(cfg)
+    net = INSTR(cfg, backbone=backbone, dino_weights=dino_weights)
     state_dict = torch.load(path)
+    
+    
+    
     if 'state_dict' in state_dict.keys():
         state_dict = state_dict['state_dict']
 
@@ -52,7 +55,7 @@ def stuff_from_state_dict_path(path):
 def process_im(im, device=torch.device('cuda')):
     im = np.array(im)[:, :, :3]
     im = ttf.to_pil_image(im)
-    im = ttf.resize(im, [480, 640], interpolation=Image.LINEAR)
+    im = ttf.resize(im, [480, 640], interpolation=Image.BILINEAR)
     im = ttf.to_tensor(im)
     im = ttf.normalize(im, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     return im.unsqueeze(0).to(device=device)
@@ -75,7 +78,7 @@ def disp_to_depth(disp, f, b):
     return depth
 
 
-def load_data(root=''):
+def load_data(root='', sensor=''):
     sensors = ['rc_visard', 'zed']
     data = {
         'rc_visard': {},
@@ -96,15 +99,34 @@ def load_folder(root='', sensor='rc_visard', folder='black_table'):
 
     for suff in suffs:
         left = os.path.join(root, folder, 'left_rgb', suff)
-        right = os.path.join(root, folder, 'right_rgb', suff)
-        depth = os.path.join(root, folder, 'depth', suff.split('.')[0] + '.npy')
+        #right = os.path.join(root, folder, 'right_rgb', suff)
+        # depth = os.path.join(root, folder, 'depth', suff.split('.')[0] + '.npy')
         gt = os.path.join(root, folder, 'gt', suff)
+        
+        # print(left + '\n' + right + '\n' + depth + '\n' + gt+ '\n')
 
-        assert os.path.isfile(left)
-        assert os.path.isfile(right)
-        assert os.path.isfile(depth)
-        assert os.path.isfile(gt)
-        data.append([left, right, depth, gt])
+        assert os.path.isfile(left), f"Left image not found: {left}"
+        # assert os.path.isfile(right)
+        # assert os.path.isfile(depth)
+        assert os.path.isfile(gt), f"GT file not found: {gt}"
+        # data.append([left, right, depth, gt])
+        data.append([left, gt])
+
+    return data
+
+#load folder with specific structure, e.g. left_rgb, right_rgb, depth, gt
+def load_folder_specific(root='', sensor='rc_visard', folder='black_table', type=''):
+    root = os.path.join(root, sensor)
+    suffs = sorted(os.listdir(os.path.join(root, folder, type)))
+    data = []
+
+    for suff in suffs:
+        img = os.path.join(root, folder, type, suff)
+        
+        print(img + '\n')
+
+        assert os.path.isfile(img), f"Image not found: {img}"
+        data.append([img])
 
     return data
 
@@ -126,7 +148,7 @@ def overlay_im_with_masks(im, ma, alpha=0.5):
     im_col = im.copy()
     for ctr, i in enumerate(np.unique(ma)[1:]):
         a, b = np.where(ma == i)
-        if a != []:
+        if a.size > 0:
             im_col [a, b, :] = colors[ctr]
     im_overlay = im.copy()
     im_overlay = cv2.addWeighted(im_overlay, alpha, im_col, 1 - alpha, 0.0)

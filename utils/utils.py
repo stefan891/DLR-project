@@ -20,7 +20,8 @@ import torch
 import torch.nn as nn
 from torch import optim
 from torch.utils.data import DataLoader as TorchLoader
-from torch.utils.data._utils.collate import container_abcs, default_collate
+import collections.abc as container_abcs
+from torch.utils.data._utils.collate import default_collate
 import h5py
 
 

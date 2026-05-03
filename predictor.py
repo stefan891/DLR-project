@@ -12,23 +12,32 @@ from utils.pred_utils import stuff_from_state_dict_path, process_im
 
 
 class Predictor:
-    def __init__(self, state_dict_path, focal_length=541.15, baseline=0.065, device=torch.device('cuda'), return_depth=True):
-        cfg, net = stuff_from_state_dict_path(state_dict_path)
+    def __init__(self, state_dict_path, focal_length=541.15, baseline=0.065, device=torch.device('cuda'), return_depth=True, backbone='INSTR', dino_weights=None):
+        cfg, net = stuff_from_state_dict_path(state_dict_path, backbone=backbone, dino_weights=dino_weights)
         net = net.to(device).eval()
-        net.adapt_to_new_intrinsics(f_new=focal_length, b_new=baseline)
+        self.with_disp = getattr(net, 'with_disp', False)
+        if self.with_disp:
+            net.adapt_to_new_intrinsics(f_new=focal_length, b_new=baseline)
         self.net = net
         self.device = device
         self.focal_length = focal_length
         self.baseline = baseline
-        self.return_depth = return_depth
+        self.return_depth = return_depth and self.with_disp
 
-    def predict(self, left, right):
-        t_left, t_right = process_im(im=left, device=self.device), process_im(im=right, device=self.device)
+    def predict(self, left, right=None):
+        t_left = process_im(im=left, device=self.device)
+        inputs = {'color_0': t_left}
+        if self.with_disp:
+            assert right is not None, "Model was built with WITH_DISP=True; a right image is required."
+            inputs['color_1'] = process_im(im=right, device=self.device)
         with torch.no_grad():
-            preds = self.net({'color_0': t_left, 'color_1': t_right})
+            preds = self.net(inputs)
+        segmap = self._preds_to_map(preds['predictions_0'])
+        if 'disp_pred' not in preds:
+            return segmap, None
         if self.return_depth:
-            return self._preds_to_map(preds['predictions_0']), self.disp_to_depth(preds['disp_pred'].cpu().squeeze().numpy())
-        return self._preds_to_map(preds['predictions_0']), preds['disp_pred'].cpu().squeeze().numpy()
+            return segmap, self.disp_to_depth(preds['disp_pred'].cpu().squeeze().numpy())
+        return segmap, preds['disp_pred'].cpu().squeeze().numpy()
 
     def disp_to_depth(self, disp):
         disp = disp.squeeze().astype(np.float32)
