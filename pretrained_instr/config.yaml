@@ -24,7 +24,6 @@ MODEL:
   WITH_DISP: False
   AXIAL_ATTENTION: True
   QUERY_PROC: expanded  # expanded, att, attcat_tfenc, attcat_bb
-  BACKBONE: "vit_base_patch14_dinov2.lvd142m"
 
 LOSS:
   POWER: 0.2
@@ -40,5 +39,3 @@ SCHEDULER:
   TYPE: "optim.lr_scheduler.StepLR"
   step_size: 10
   gamma: 0.5
-
-

@@ -110,6 +110,6 @@ def get_spaced_colors(n, maximum=255):
     """
     interval = int(len(_COLORS) / n)
 
-    colors = [tuple((_COLORS[idx] * maximum).astype(np.int)) for idx in range(0,len(_COLORS),interval)]
+    colors = [tuple((_COLORS[idx] * maximum).astype(np.int64)) for idx in range(0,len(_COLORS),interval)]
 
     return colors

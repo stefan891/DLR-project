@@ -18,46 +18,66 @@ from model.subpixel_corr import SubpixelCorrelationWrapper
 from utils.confmat import ConfusionMatrix
 from model.loss import bipartite_matching_segmentation_loss
 from utils.utils import create_optimizer, create_scheduler, pekdict, load_config
+import timm
 
+
+# class DINO(timm.)
 
 class INSTR(pl.LightningModule):
-    def __init__(self, cfg=None):
+    def __init__(self, cfg=None, backbone=None, dino_weights=None, hub_name=None):
         super().__init__()
 
         self.config = cfg
+        self.backbone_type = backbone
+        self.dino_weights = dino_weights
 
         # settings
         self.num_queries = cfg.MODEL.get("NUM_QUERIES", 15)
-        self.aux_decoder_loss = cfg.MODEL.get("AUX_DECODER_LOSS", True)
-        self.with_disp = cfg.MODEL.get("WITH_DISP", True)
+        self.aux_decoder_loss = cfg.MODEL.get("AUX_DECODER_LOSS", False)
+        self.with_disp = cfg.MODEL.get("WITH_DISP", False)
         self.query_proc = cfg.MODEL.get("QUERY_PROC", "expanded")
 
-        try:
-            res50 = resnet50(pretrained=True)
-            print(f"Loaded pre-trained ResNet50")
-        except Exception as e:
-            res50 = resnet50(pretrained=False)
-            print(f"Failed to load pre-trained ResNet50 weights: {e}")
+        if backbone=="INSTR":
+            try:
+                res50 = resnet50(pretrained=True)
+                print(f"Loaded pre-trained ResNet50")
+            except Exception as e:
+                res50 = resnet50(pretrained=False)
+                print(f"Failed to load pre-trained ResNet50 weights: {e}")
 
-        self.layer1 = nn.Sequential(res50.conv1, res50.bn1, res50.relu, res50.maxpool, res50.layer1)
-        self.layer2 = res50.layer2
+            self.layer1 = nn.Sequential(res50.conv1, res50.bn1, res50.relu, res50.maxpool, res50.layer1)
+            self.layer2 = res50.layer2
 
-        # axial attention for layer 3 and 4
-        self.groups = 8
-        self.base_width = 64
-        self.dilation = 1
-        self._norm_layer = nn.BatchNorm2d
-        if cfg.MODEL.get("AXIAL_ATTENTION", True):
-            self.layer3 = self._make_axatt_layer(AxialBlock, 512, 512, 6, stride=2, kernel_size_height=60,
-                                                 kernel_size_width=80, dilate=False)
-            self.layer4 = self._make_axatt_layer(AxialBlock, 1024, 1024, 3, stride=2, kernel_size_height=30,
-                                                 kernel_size_width=40, dilate=False)
+            # axial attention for layer 3 and 4
+            self.groups = 8
+            self.base_width = 64
+            self.dilation = 1
+            self._norm_layer = nn.BatchNorm2d
+            if cfg.MODEL.get("AXIAL_ATTENTION", True):
+                self.layer3 = self._make_axatt_layer(AxialBlock, 512, 512, 6, stride=2, kernel_size_height=60,
+                                                    kernel_size_width=80, dilate=False)
+                self.layer4 = self._make_axatt_layer(AxialBlock, 1024, 1024, 3, stride=2, kernel_size_height=30,
+                                                    kernel_size_width=40, dilate=False)
+            else:
+                self.layer3 = res50.layer3
+                self.layer4 = res50.layer4
+                
+            self.backbone_reduction = nn.Conv2d(2048, 256, 1)
+            
+        
+        elif backbone in ["dinov2b", "dinov2l"]:
+            from model.dino import DinoBackbone
+            self.backbone = DinoBackbone(backbone=backbone, pretrained=True)
+            self.backbone_reduction = nn.Conv2d(2048, 256, 1)
+            assert not self.with_disp, "WITH_DISP not supported with ViT backbones."
         else:
-            self.layer3 = res50.layer3
-            self.layer4 = res50.layer4
+            raise ValueError(f"Unknown backbone: {backbone}")
+            
+            
 
         # reduction conv
-        self.backbone_reduction = nn.Conv2d(2048, 256, 1)
+        
+        
 
         # transformer
         self.hs_dim = 1 if not self.aux_decoder_loss else 6
@@ -70,7 +90,7 @@ class INSTR(pl.LightningModule):
 
         if self.query_proc == "expanded":
             fpn_dim = 256
-        elif self.query_proc == "att":
+        elif self.query_proc == "att":  
             fpn_dim = 8
         elif self.query_proc == "attcat_tfenc" or self.query_proc == "attcat_bb":
             fpn_dim = 264
@@ -172,26 +192,36 @@ class INSTR(pl.LightningModule):
         left = data['color_0']
 
         # encoder forward
-        l1_left = self.layer1(left)
-        l2_left = self.layer2(l1_left)
+        
+        if self.backbone_type == "INSTR":
+            l1_left = self.layer1(left)
+            l2_left = self.layer2(l1_left)
 
-        if self.with_disp:
-            l1_right = self.layer1(data['color_1'])
-            l2_right = self.layer2(l1_right)
+            if self.with_disp:
+                print("Processing RIGHT image through correlation layers for disparity prediction")
+                l1_right = self.layer1(data['color_1'])
+                l2_right = self.layer2(l1_right)
 
-            corr1 = self.corr_layer1(l1_left, l1_right)
-            corr2 = self.corr_layer2(l2_left, l2_right)
-            l1_cat = torch.cat((l1_left, corr1), dim=1)
-            l2_cat = torch.cat((l2_left, corr2), dim=1)
-            reduced = self.corr_reduction(l2_cat)
-        else:
-            reduced = l2_left
+                corr1 = self.corr_layer1(l1_left, l1_right)
+                corr2 = self.corr_layer2(l2_left, l2_right)
+                l1_cat = torch.cat((l1_left, corr1), dim=1)
+                l2_cat = torch.cat((l2_left, corr2), dim=1)
+                reduced = self.corr_reduction(l2_cat)
+            else:
+                reduced = l2_left
+                l1_cat = l1_left
+                l2_cat = l2_left
+
+            # further encode
+            l3 = self.layer3(reduced)
+            l4 = self.layer4(l3)
+            
+        elif self.backbone_type in ["dinov2b", "dinov2l"]:
+            
+            l1_left, l2_left, l3, l4 = self.backbone(left)
             l1_cat = l1_left
             l2_cat = l2_left
-
-        # further encode
-        l3 = self.layer3(reduced)
-        l4 = self.layer4(l3)
+            
 
         l4_reduced = self.backbone_reduction(l4)
         b = l4_reduced.shape[0]
