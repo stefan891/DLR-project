@@ -12,7 +12,9 @@ Then, run `python demo.py` for the default demo.
 
 Run `python demo.py --help` or have a look at the [predictor class](predictor.py) for further information.
 
-### DINO demmo
+### DINO demo
+Before trying the model will be needed to download the model instr and to create a virtual environment with conda using the `instr-dino.yml` with the following command:
+`conda env create --name instr-dino --file=instr-dino.yml && conda activate instr-dino`
 to be able to use the dino backbone and to see the result of the overlay mask run 
 `python instr_dino_demo.py --root ./STIOS --rcvisard --save-dir ./new_test --backbone dinov2l --state-dict pretrained_instr/models/pretrained_model.pth`
 
