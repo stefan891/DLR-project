@@ -6,7 +6,7 @@ Then, run `python predict_stios.py --state-dict pretrained_instr/models/pretrain
 This will generate mIoU and F1 scores for every scene.
 
 ### Demo
-Download the [pretrained model](https://drive.google.com/uc?id=1wFSTa5IoJYUTYpGeunE7SzXMfqRWXHi7) and extract the contents here.
+Download the [pretrained model](https://drive.google.com/uc?id=1wFSTa5IoJYUTYpGeunE7SzXMfqRWXHi7) and extract the contents here: `./pretrained_instr/models/`.
 Overwrite the [camera class](demo.py) so that it returns a pair of stereo images (RGB, np.array, uint8) from your stereo camera.
 Then, run `python demo.py` for the default demo.
 
